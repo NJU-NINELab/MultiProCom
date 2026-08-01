@@ -1,74 +1,37 @@
 # MultiProCom
 
-This repository contains the retained training, evaluation, deployment, and
-real-system analysis pipeline for MultiProCom. The model uses five historical
-camera/radar observations to predict eight future beam indices.
+MultiProCom 根据连续 5 个历史相机与毫米波雷达观测，预测未来 8 个时刻的波束索引。
 
-## Current implementation
+## 最新方法设计
 
-- `multimodal_encoders.py`: motion-component visual encoder and four-view radar
-  encoder.
-- `multiprocom.py`: the original learned-gate RAMF plus GRU autoregressive
-  decoder, retained as the GRU-AR ablation and for the full-training paper
-  experiment.
-- `source_transition_afsp.py`: the final lightweight AFSP. It regularizes the
-  parallel future logits with a source-estimated beam-transition prior.
-- `train_multiprocom.py`: common model construction and training utilities.
-- `train_baseline_fixed_epoch_cross_scene.py`: 140-epoch Strong-light training
-  for R-only, V-only, w/o RAMF, and the parallel-decoder anchor.
-- `search_source_only_transition_afsp.py`: reproduces the final V23
-  source-transition AFSP.
-- `evaluate_latest_cross_scene_all_metrics.py`: evaluates all retained methods
-  using Top-1/3/5, ±1-beam accuracy, beam MAE, normalized beam-power loss, and
-  spectral-efficiency ratio.
-- `infer_multiprocom.py`: deployment inference from five camera frames and five
-  raw radar ADC frames.
+模型首先将相机图像转换为运动组件框，并通过集合注意力编码目标几何与运动信息；雷达支路分别编码 range–Doppler、range–angle、delay–Doppler 和 power map。RAMF 根据视觉组件可用性和两种模态特征自适应融合信息，同时保持雷达主导。
 
-## Retained artifacts
+融合后的历史序列由并行预测器生成 8 步基础 logits。最终 AFSP 使用 Strong-light 源场景标签估计波束转移矩阵，并将上一预测步的概率分布传播为下一步的转移先验：
 
-- `experiments/afsp_v23_source_only_transition_final/`: final MultiProCom
-  checkpoint and AFSP-selection records.
-- `experiments/baseline_cross_scene_epoch140/`: fixed-epoch comparison models.
-- `experiments/strong_light_generalization_early_stop/`: retained GRU-AR
-  ablation checkpoint.
-- `experiments/latest_cross_scene_all_metrics/`: latest four-scene predictive
-  performance tables.
-- `experiments/multiprocom/`: full-training paper figures, compact checkpoints,
-  preprocessing assets, metrics, and complexity results.
-- `logs/{Strong_light,Dim light,Obstruction}/`: the latest three repeated
-  hardware runs for each control method.
-- `experiments/repeated_system_log_results/`,
-  `experiments/actual_control_lead/`, and
-  `experiments/control_overhead_results/`: current system-performance,
-  proactive-control lead, and control-overhead results.
+\[
+\hat{l}_m=l_m+\beta\log(p_{m-1}T+\epsilon).
+\]
 
+该设计保留每个预测步对多模态历史的直接依赖，同时引入有序的未来状态约束。最终配置使用 \(N=5\)、\(M=8\)、9 个候选波束和 \(\beta=0.4\)。
 
-## Main commands
+## 训练
 
-Evaluate the retained cross-scene models:
+一键训练脚本为：
 
 ```bash
-python evaluate_latest_cross_scene_all_metrics.py --device cuda
+bash run_latest_multiprocom_training.sh
 ```
 
-Regenerate the latest hardware-log analyses:
+默认数据目录为：
 
-```bash
-python plot_repeated_system_log_metrics.py
-python analyze_actual_control_lead.py
-python plot_control_overhead_metrics.py
+```text
+/home/ybpeng/Data/ActualMulData/dataset_multimodal_data
 ```
 
-The full-data resubstitution experiment can still be reproduced with:
 
-```bash
-bash run_multiprocom_experiments.sh
-```
+## 部署推理
 
-## Deployment inference
-
-Provide five synchronized camera images and five radar ADC `.bin` files in
-chronological order:
+部署脚本接收按时间顺序排列的 5 张图像和 5 个雷达 ADC `.bin` 文件：
 
 ```bash
 python infer_multiprocom.py \
@@ -78,8 +41,14 @@ python infer_multiprocom.py \
   --output-json prediction.json
 ```
 
-The default checkpoint is the final V23 source-transition AFSP. `beam_indices`
-contains the eight predictions and is zero-based by default; use
-`--beam-index-base 1` for a one-based hardware codebook. In a streaming setup,
-`--previous-image image_t0.jpg` supplies the frame immediately before the
-history window for first-step motion extraction.
+输出 JSON 中的 `beam_indices` 为未来 8 步预测结果，默认采用 0-based 索引。硬件码本从 1 开始编号时增加 `--beam-index-base 1`。在线部署时可使用 `--previous-image image_t0.jpg` 提供历史窗口前一帧，以提取第一个历史时刻的运动组件。
+
+若需要加载重新训练的权重：
+
+```bash
+python infer_multiprocom.py \
+  --images image_t1.jpg image_t2.jpg image_t3.jpg image_t4.jpg image_t5.jpg \
+  --radar-adc adc_t1.bin adc_t2.bin adc_t3.bin adc_t4.bin adc_t5.bin \
+  --checkpoint experiments/latest_training_run/multiprocom/selected_checkpoint.pt \
+  --device cuda
+```
