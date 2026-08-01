@@ -42,15 +42,6 @@ camera/radar observations to predict eight future beam indices.
   `experiments/control_overhead_results/`: current system-performance,
   proactive-control lead, and control-overhead results.
 
-Raw datasets remain external. The default actual-data root is:
-
-```text
-/home/ybpeng/Data/ActualMulData/dataset_multimodal_data
-```
-
-Generated radar maps under
-`experiments/multiprocom/assets/precomputed_radar_maps/` are kept locally and
-excluded from Git.
 
 ## Main commands
 
